@@ -1,12 +1,35 @@
 //Checks after any change in input i.e. delete, add, backspace or any action
-document.getElementById("name").addEventListener("input", validateForm);
-document.getElementById("dob").addEventListener("input", validateForm);
-document.getElementById("email").addEventListener("input", validateForm);
-document.getElementById("password").addEventListener("input", validateForm);
-document.getElementById("confirmPassword").addEventListener("input", validateForm);
-document.getElementById("phone").addEventListener("input", validateForm);
-document.getElementById("city").addEventListener("input", validateForm);
-document.getElementById("address").addEventListener("input", validateForm);
+document.getElementById("name").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("dob").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("email").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("password").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("confirmPassword").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("phone").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("city").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
+document.getElementById("address").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
 
 //Sets border: Green for valid, Red for invalid 
 function setBorder(id, valid) {
@@ -187,6 +210,9 @@ function othercity() {
 
 //Final message on successful registration
 function showMessage(){
-        if(validateForm()){
-        alert("Registration Successful!");''}
+    submitted = true;
+
+    if(validateForm()){
+        alert("Registration Successful!");
     }
+}
