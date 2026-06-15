@@ -27,6 +27,10 @@ document.getElementById("city").addEventListener("input", function () {
     if (submitted) validateForm();
 });
 
+document.getElementById("otherCity").addEventListener("input", function () {
+    if (submitted) validateForm();
+});
+
 document.getElementById("address").addEventListener("input", function () {
     if (submitted) validateForm();
 });
@@ -38,6 +42,20 @@ function setBorder(id, valid) {
         e.style.border = "2px solid green";
     } else {
         e.style.border = "2px solid red";
+    }
+}
+
+
+// Display input box for 'Other' city
+function othercity() {
+    var select = document.getElementById("city");
+    var other = document.getElementById("otherCity");
+
+    if (select.value == "Other") {
+        other.style.display = "block";  //show textbox
+    } else {
+        other.style.display = "none";   //hide textbox
+        other.value = "";
     }
 }
 
@@ -63,6 +81,7 @@ function validateForm() {
     let confirmPassword = document.getElementById('confirmPassword').value.trim();
     let phone = document.getElementById('phone').value.trim();
     let city = document.getElementById('city').value.trim();
+    let otherCity = document.getElementById('otherCity').value.trim();
     let address = document.getElementById('address').value.trim();
 
     //Flag
@@ -76,9 +95,9 @@ function validateForm() {
     }
 
     else {
-        let namePattern = /^[A-Za-z_]+$/;
+        let namePattern = /^[A-Za-z ]+$/;
         if (!name.match(namePattern)) {
-            document.getElementById("nameError").innerHTML = "Name should only contain alphabets (A-Z)";
+            document.getElementById("nameError").innerHTML = "Name should only contain alphabets (A-Z/a-z)";
             setBorder("name", false);
             isValid = false;
         }
@@ -124,7 +143,7 @@ function validateForm() {
 
     // Password Validation
     // Must include uppercase, lowercase, digit, special char
-    let passwordPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,20}$/;
+    let passwordPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&#^])[A-Za-z\d@$!%*?&#^]{8,20}$/;
 
     if (password.length < 8) {
         document.getElementById("passError").innerHTML = "Password must be at least 8 characters";
@@ -173,11 +192,34 @@ function validateForm() {
 
     // City Validation
     // Must not be empty
-    if (city === "") {
-        document.getElementById("cityError").innerHTML = "Select a city";
+    if (city == "") {
+        document.getElementById("cityError").innerHTML = "Select city";
         setBorder("city", false);
         isValid = false;
     }
+
+    else if (city == "Other") {
+
+        let cityPattern = /^[A-Za-z ]+$/;
+
+        if (otherCity == "") {
+            document.getElementById("cityError").innerHTML = "Enter city name";
+            setBorder("city", false);
+            isValid = false;
+        }
+
+        // NOT MATCH (simple way)
+        else if (!otherCity.match(cityPattern)) {
+            document.getElementById("cityError").innerHTML = "Only letters allowed";
+            setBorder("city", false);
+            isValid = false;
+        }
+
+        else {
+            setBorder("city", true);
+        }
+    }
+
     else {
         setBorder("city", true);
     }
@@ -196,19 +238,6 @@ function validateForm() {
     //Return final Validation
     return isValid;
 
-}
-
-// Display input box for 'Other' city
-function othercity() {
-    var select = document.getElementById("city");
-    var other = document.getElementById("otherCity");
-
-    if (select.value == "Other") {
-        other.style.display = "block";  //show textbox
-    } else {
-        other.style.display = "none";   //hide textbox
-        other.value = "";
-    }
 }
 
 //Final message on successful registration
