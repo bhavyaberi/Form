@@ -21,13 +21,18 @@
 <div class="screen hidden" id="authScreen">
     <form class="panel auth-box" id="authForm">
         <div class="brand dark"><span class="logo">A</span><b>Askly</b></div>
-        <h2>Owner login</h2>
-        <p class="muted">Enter the admin password you set in Code.gs.</p>
-        <label class="lbl" for="authPass">Admin password</label>
+        <h2>Login</h2>
+        <p class="muted">Login to build forms. New here? Pick a username + password and click Create account.</p>
+        <label class="lbl" for="authUser">Username</label>
+        <input type="text" id="authUser" class="field" autocomplete="username" autocapitalize="none" required>
+        <label class="lbl" for="authPass">Password</label>
         <input type="password" id="authPass" class="field" autocomplete="current-password" required>
+        <label class="lbl" for="authInvite">Invite code (only if the owner gave you one)</label>
+        <input type="text" id="authInvite" class="field" autocapitalize="none">
         <div class="error auth-error" id="authError"></div>
         <div class="actions">
             <button type="submit" class="btn primary" id="loginBtn">Login</button>
+            <button type="button" class="btn ghost" id="signupBtn">Create account</button>
         </div>
     </form>
 </div>
@@ -62,7 +67,7 @@
         </nav>
 
         <div class="side-foot">
-            <div id="userEmail" class="user-email">Owner</div>
+            <div id="userEmail" class="user-email"></div>
             <button type="button" class="btn ghost small signout" id="signOutBtn">Sign out</button>
         </div>
     </aside>

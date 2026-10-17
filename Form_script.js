@@ -27,7 +27,7 @@ function el(tag, cls, text) {
    ===================================================================== */
 const Store = {
     PREF_KEY: "askly_current_form",          // remembers which form you had open (not data)
-    PW_KEY:   "askly_admin_pw",              // password kept only until you close the tab
+    PW_KEY:   "askly_login",                 // username+password kept only until you close the tab
 
     // send JSON to the script. "text/plain" avoids browser CORS pre-checks.
     async api(body) {
@@ -41,15 +41,23 @@ const Store = {
         if (!data.ok) throw new Error(data.error || "Server error");
         return data;
     },
-    admin(body) { return this.api(Object.assign({ pw: sessionStorage.getItem(this.PW_KEY) || "" }, body)); },
+    admin(body) {                              // every owner action carries username + password
+        const c = JSON.parse(sessionStorage.getItem(this.PW_KEY) || "{}");
+        return this.api(Object.assign({ user: c.user || "", pw: c.pw || "" }, body));
+    },
 
-    async login(pw) {
-        sessionStorage.setItem(this.PW_KEY, pw);
+    async login(user, pw) {
+        sessionStorage.setItem(this.PW_KEY, JSON.stringify({ user: user, pw: pw }));
         try { await this.admin({ action: "login" }); }
         catch (e) { sessionStorage.removeItem(this.PW_KEY); throw e; }
     },
+    async register(user, pw, invite) {
+        await this.api({ action: "register", user: user, pw: pw, invite: invite });
+        await this.login(user, pw);
+    },
     logout()   { sessionStorage.removeItem(this.PW_KEY); },
     loggedIn() { return !!sessionStorage.getItem(this.PW_KEY); },
+    username() { return (JSON.parse(sessionStorage.getItem(this.PW_KEY) || "{}")).user || ""; },
 
     // ----- forms -----
     async getForm(id) {                       // public (anyone with the link)
@@ -938,19 +946,24 @@ $("newFormBtn").addEventListener("click", async () => {
     toast("New form created");
 });
 
-/* ----- owner login (just one password) ----- */
-$("authForm").addEventListener("submit", async e => {
-    e.preventDefault();
+/* ----- login / create account ----- */
+async function doAuth(isSignup) {
     $("authError").textContent = "";
-    $("loginBtn").disabled = true;
+    const user = $("authUser").value.trim().toLowerCase(), pw = $("authPass").value;
+    if (!user || !pw) { $("authError").textContent = "Enter username and password"; return; }
+    $("loginBtn").disabled = true; $("signupBtn").disabled = true;
     try {
-        await Store.login($("authPass").value);
+        if (isSignup) await Store.register(user, pw, $("authInvite").value.trim());
+        else await Store.login(user, pw);
         await startOwner();
     } catch (err) { $("authError").textContent = err.message; }
-    $("loginBtn").disabled = false;
-});
+    $("loginBtn").disabled = false; $("signupBtn").disabled = false;
+}
+$("authForm").addEventListener("submit", e => { e.preventDefault(); doAuth(false); });
+$("signupBtn").addEventListener("click", () => doAuth(true));
 $("signOutBtn").addEventListener("click", () => {
     Store.logout();
+    formId = null; responsesCache = []; updateCount();
     show("appRoot", false); show("authScreen", true);
     $("authPass").value = "";
 });
@@ -979,6 +992,7 @@ async function startPublic(id) {
 
 async function startOwner() {
     show("authScreen", false); show("loadingScreen", true);
+    $("userEmail").textContent = "Logged in: " + Store.username();
     const forms = await Store.myForms();
     if (!forms.length) await createAndOpen();
     else {
