@@ -187,5 +187,21 @@
 <div class="snackbar" id="snackbar"></div>
 <script src="config.js"></script>
 <script src="Form_script.js"></script>
+<script>
+/* Safety check: if the page is still on "Loading..." after 4 seconds, say WHY on screen */
+setTimeout(function () {
+    var box = document.getElementById("loadingScreen");
+    if (!box || box.classList.contains("hidden")) return;
+    var cfgOk = (typeof SCRIPT_URL !== "undefined");
+    var jsOk  = (typeof Store !== "undefined");
+    var msg = "Still loading. Check:\n" +
+        "config.js loaded: " + (cfgOk ? "YES" : "NO (file missing / wrong name)") + "\n" +
+        "Form_script.js loaded: " + (jsOk ? "YES" : "NO (file missing / wrong name / old file)") + "\n" +
+        (jsOk ? "Script is running but the server did not answer. Check the Web app URL in config.js and that 'Who has access' = Anyone." : "") +
+        "\nPage address: " + location.href;
+    box.innerHTML = '<pre style="white-space:pre-wrap;max-width:560px;font-size:15px;line-height:1.6"></pre>';
+    box.firstChild.textContent = msg;
+}, 4000);
+</script>
 </body>
 </html>

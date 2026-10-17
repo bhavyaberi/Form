@@ -34,7 +34,8 @@ const Store = {
         const res = await fetch(SCRIPT_URL, {
             method: "POST",
             headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(20000)       // give up after 20 seconds
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "Server error");
@@ -52,7 +53,7 @@ const Store = {
 
     // ----- forms -----
     async getForm(id) {                       // public (anyone with the link)
-        const res = await fetch(SCRIPT_URL + "?action=form&id=" + encodeURIComponent(id));
+        const res = await fetch(SCRIPT_URL + "?action=form&id=" + encodeURIComponent(id), { signal: AbortSignal.timeout(20000) });
         const data = await res.json();
         return data.ok ? data.form : null;
     },
