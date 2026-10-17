@@ -956,7 +956,11 @@ async function doAuth(isSignup) {
         if (isSignup) await Store.register(user, pw, $("authInvite").value.trim());
         else await Store.login(user, pw);
         await startOwner();
-    } catch (err) { $("authError").textContent = err.message; }
+    } catch (err) {
+        $("authError").textContent = err.message === "Wrong password"
+            ? "Google script is OLD. Deploy the new Code.gs (New deployment) and put the new URL in config.js."
+            : err.message;
+    }
     $("loginBtn").disabled = false; $("signupBtn").disabled = false;
 }
 $("authForm").addEventListener("submit", e => { e.preventDefault(); doAuth(false); });
