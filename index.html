@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#12284c">
+    <title>Askly</title>
+    <link rel="stylesheet" href="Form_CSS.css">
+</head>
+<body>
+<!-- ============ LOADING / LOGIN / NOT FOUND ============ -->
+<div class="screen" id="loadingScreen"><div class="spinner"></div><p>Loading...</p></div>
+
+<div class="screen hidden" id="notFoundScreen">
+    <div class="panel auth-box">
+        <h2>Form not found</h2>
+        <p class="muted">This link is wrong or the form was deleted.</p>
+    </div>
+</div>
+
+<div class="screen hidden" id="authScreen">
+    <form class="panel auth-box" id="authForm">
+        <div class="brand dark"><span class="logo">A</span><b>Askly</b></div>
+        <h2>Owner login</h2>
+        <p class="muted">Enter the admin password you set in Code.gs.</p>
+        <label class="lbl" for="authPass">Admin password</label>
+        <input type="password" id="authPass" class="field" autocomplete="current-password" required>
+        <div class="error auth-error" id="authError"></div>
+        <div class="actions">
+            <button type="submit" class="btn primary" id="loginBtn">Login</button>
+        </div>
+    </form>
+</div>
+
+<div class="app hidden" id="appRoot">
+
+    <!-- ============ VERTICAL SIDEBAR ============ -->
+    <aside class="sidebar" id="sidebar">
+        <button type="button" class="side-close" id="sideClose" aria-label="Close menu">&times;</button>
+        <div class="brand">
+            <span class="logo">A</span>
+            <div>
+                <b>Askly</b>
+                <small>Build and collect answers</small>
+            </div>
+        </div>
+
+        <nav class="nav">
+            <button type="button" class="nav-btn" data-view="formsView">
+                <span class="txt">My Forms</span>
+            </button>
+            <button type="button" class="nav-btn active" data-view="fillView">
+                <span class="txt">Preview Form</span>
+            </button>
+            <button type="button" class="nav-btn" data-view="buildView">
+                <span class="txt">Build Form</span>
+            </button>
+            <button type="button" class="nav-btn" data-view="respView">
+                <span class="txt">Responses</span>
+                <span class="badge" id="responseCount">0</span>
+            </button>
+        </nav>
+
+        <div class="side-foot">
+            <div id="userEmail" class="user-email">Owner</div>
+            <button type="button" class="btn ghost small signout" id="signOutBtn">Sign out</button>
+        </div>
+    </aside>
+
+    <!-- dark overlay behind the menu on phones -->
+    <div class="backdrop" id="backdrop"></div>
+
+    <div class="content">
+    <!-- ============ TOP BAR WITH HAMBURGER ============ -->
+    <header class="topbar">
+        <button type="button" class="menu-btn" id="menuBtn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">
+            <span></span><span></span><span></span>
+        </button>
+        <span class="top-brand">Askly</span>
+        <span class="top-sep">/</span>
+        <span class="top-page" id="pageTitle">My Forms</span>
+    </header>
+
+    <!-- ============ MAIN AREA ============ -->
+    <main class="main">
+
+        <!-- ===== VIEW 0: MY FORMS ===== -->
+        <section id="formsView" class="view hidden">
+            <div class="panel resp-head">
+                <div>
+                    <h2>My forms</h2>
+                    <div class="muted">Each form has its own share link.</div>
+                </div>
+                <button type="button" class="btn primary" id="newFormBtn">+ New form</button>
+            </div>
+            <div id="formsList"></div>
+        </section>
+
+        <!-- ===== VIEW 1: FILL FORM ===== -->
+        <section id="fillView" class="view">
+            <form id="liveForm" novalidate>
+                <div class="hero">
+                    <h1 id="formTitle"></h1>
+                    <p id="formDesc"></p>
+                </div>
+
+                <div id="questions"></div>
+
+                <div class="actions" id="formActions">
+                    <button type="submit" class="btn primary" id="submitBtn">Submit</button>
+                    <button type="button" class="btn ghost" id="clearBtn">Clear form</button>
+                </div>
+            </form>
+
+            <div class="success hidden" id="successBox">
+                <div class="tick">&#10003;</div>
+                <h2>Response submitted</h2>
+                <p id="successText">Your answers are saved.</p>
+                <button type="button" class="btn primary" id="anotherBtn">Submit another response</button>
+            </div>
+        </section>
+
+        <!-- ===== VIEW 2: BUILD FORM ===== -->
+        <section id="buildView" class="view hidden">
+            <div class="panel share-panel">
+                <h2>Share this form</h2>
+                <p class="muted">Anyone with this link can fill the form. They can NOT see any responses.</p>
+                <div class="share-row">
+                    <input type="text" id="shareLink" class="field" readonly>
+                    <button type="button" class="btn primary" id="copyLinkBtn">Copy link</button>
+                    <button type="button" class="btn ghost" id="openLinkBtn">Open</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-head">
+                    <h2>Form settings</h2>
+                    <span class="save-state" id="saveState">All changes saved</span>
+                </div>
+                <label class="lbl" for="bTitle">Form title</label>
+                <input type="text" id="bTitle" class="field" placeholder="Form title">
+                <label class="lbl" for="bDesc">Description</label>
+                <textarea id="bDesc" class="field" rows="2" placeholder="Short description"></textarea>
+            </div>
+
+            <div id="builderList"></div>
+
+            <div class="panel add-panel">
+                <h2>Add a question</h2>
+                <p class="muted">Click a type to add it to the end of your form.</p>
+                <div class="chips" id="addChips"></div>
+            </div>
+
+            <div class="build-foot">
+                <button type="button" class="btn ghost" id="resetSchemaBtn">Reset to default questions</button>
+            </div>
+        </section>
+
+        <!-- ===== VIEW 3: RESPONSES ===== -->
+        <section id="respView" class="view hidden">
+            <div class="panel resp-head">
+                <div>
+                    <div class="resp-count"><span id="respTotal">0</span> <span id="respWord">responses</span></div>
+                    <div class="muted">Private: only you (logged in) can see these. Auto-refreshes every 15 seconds.</div>
+                </div>
+                <div class="resp-actions">
+                    <button type="button" class="btn ghost" id="refreshBtn">Refresh</button>
+                    <button type="button" class="btn ghost" id="exportBtn">Download Excel</button>
+                    <button type="button" class="btn danger" id="deleteAllBtn">Delete all</button>
+                </div>
+            </div>
+
+            <div class="panel table-panel">
+                <div class="table-wrap">
+                    <table id="respTable">
+                        <thead id="respHead"></thead>
+                        <tbody id="respBody"></tbody>
+                    </table>
+                </div>
+                <div class="empty" id="emptyMsg">No responses yet. Fill the form to see data here.</div>
+            </div>
+        </section>
+    </main>
+    </div>
+</div>
+
+<div class="snackbar" id="snackbar"></div>
+<script src="config.js"></script>
+<script src="Form_script.js"></script>
+</body>
+</html>

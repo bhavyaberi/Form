@@ -1,11 +1,12 @@
 /* =====================================================================
-   Form_script.js  (Askly)
-   PART 1 : Store       -> local backend (localStorage)
+   Form_script.js  (Askly, shareable + online version)
+   PART 1 : Store       -> online backend (Google Apps Script + Google Sheet)
    PART 2 : Schema      -> the list of questions (default + new question)
    PART 3 : Fill form   -> draws questions from schema + validation
    PART 4 : Builder     -> add / edit / move / delete questions
-   PART 5 : Responses   -> table, delete, Excel export
-   PART 6 : Navigation + start-up
+   PART 5 : Responses   -> live table, delete, Excel export
+   PART 6 : Navigation  -> sidebar, hamburger menu
+   PART 7 : Share link, My Forms, owner login, start-up
    ===================================================================== */
 
 const $ = id => document.getElementById(id);
@@ -19,48 +20,58 @@ function el(tag, cls, text) {
 }
 
 /* =====================================================================
-   PART 1 : LOCAL BACKEND
-   localStorage keeps strings, so arrays/objects go through JSON.
-   Two keys: one for the question list (schema), one for responses.
+   PART 1 : ONLINE BACKEND (Google Apps Script + Google Sheet)
+   Every function below sends a small message to SCRIPT_URL (your Code.gs).
+   Public actions : open a form, submit answers
+   Admin actions  : everything else (needs the admin password)
    ===================================================================== */
 const Store = {
-    SCHEMA_KEY: "formcraft_schema_v1",
-    RESP_KEY:   "formcraft_responses_v1",
+    PREF_KEY: "askly_current_form",          // remembers which form you had open (not data)
+    PW_KEY:   "askly_admin_pw",              // password kept only until you close the tab
 
-    _read(key, fallback) {
-        try {
-            const raw = localStorage.getItem(key);
-            return raw ? JSON.parse(raw) : fallback;
-        } catch (e) {
-            console.error("Read failed", e);
-            return fallback;
-        }
+    // send JSON to the script. "text/plain" avoids browser CORS pre-checks.
+    async api(body) {
+        const res = await fetch(SCRIPT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "Server error");
+        return data;
     },
-    _write(key, value) {
-        try {
-            localStorage.setItem(key, JSON.stringify(value));
-            return true;
-        } catch (e) {
-            console.error("Write failed", e);
-            return false;
-        }
-    },
+    admin(body) { return this.api(Object.assign({ pw: sessionStorage.getItem(this.PW_KEY) || "" }, body)); },
 
-    // ----- schema (questions) -----
-    getSchema()      { return this._read(this.SCHEMA_KEY, null); },
-    saveSchema(s)    { return this._write(this.SCHEMA_KEY, s); },
+    async login(pw) {
+        sessionStorage.setItem(this.PW_KEY, pw);
+        try { await this.admin({ action: "login" }); }
+        catch (e) { sessionStorage.removeItem(this.PW_KEY); throw e; }
+    },
+    logout()   { sessionStorage.removeItem(this.PW_KEY); },
+    loggedIn() { return !!sessionStorage.getItem(this.PW_KEY); },
+
+    // ----- forms -----
+    async getForm(id) {                       // public (anyone with the link)
+        const res = await fetch(SCRIPT_URL + "?action=form&id=" + encodeURIComponent(id));
+        const data = await res.json();
+        return data.ok ? data.form : null;
+    },
+    async myForms() {
+        const d = await this.admin({ action: "listForms" });
+        return d.forms.sort((x, y) => (y.updatedAt || 0) - (x.updatedAt || 0));
+    },
+    async createForm(sc) { return (await this.admin({ action: "saveForm", form: sc })).id; },
+    saveForm(id, sc)     { return this.admin({ action: "saveForm", id: id, form: sc }); },
+    deleteForm(id)       { return this.admin({ action: "deleteForm", id: id }); },
 
     // ----- responses -----
-    getResponses()   { return this._read(this.RESP_KEY, []); },
-    addResponse(r) {
-        const all = this.getResponses();
-        r.id = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
-        r.submittedAt = new Date().toISOString();
-        all.push(r);
-        return this._write(this.RESP_KEY, all);
-    },
-    removeResponse(id) { return this._write(this.RESP_KEY, this.getResponses().filter(r => r.id !== id)); },
-    clearResponses()   { localStorage.removeItem(this.RESP_KEY); }
+    addResponse(formId, r)   { return this.api({ action: "submit", formId: formId, answers: r.answers }); },
+    removeResponse(_f, id)   { return this.admin({ action: "deleteResponse", id: id }); },
+    clearResponses(formId)   { return this.admin({ action: "clearResponses", formId: formId }); },
+    async listResponses(formId) {
+        const d = await this.admin({ action: "listResponses", formId: formId });
+        return d.responses.sort((x, y) => x.submittedAt < y.submittedAt ? -1 : 1);
+    }
 };
 
 // Passwords are never saved as plain text. We save a SHA-256 hash only.
@@ -121,8 +132,10 @@ function defaultSchema() {
     };
 }
 
-let schema = Store.getSchema() || defaultSchema();
-if (!Array.isArray(schema.questions)) schema = defaultSchema();   // safety if storage is corrupted
+let schema = defaultSchema();     // replaced by the saved form once it is loaded
+let formId = null;                // id of the form that is open
+let publicMode = false;           // true when opened from a shared link (?f=ID)
+let responsesCache = [];          // latest responses (live)
 
 
 /* =====================================================================
@@ -376,19 +389,26 @@ liveForm.addEventListener("submit", async e => {
         answers.push({ id: q.id, label: q.label, type: q.type, value: value, secret: secret });
     }
 
-    if (Store.addResponse({ answers: answers })) {
-        updateCount();
+    try {
+        await Store.addResponse(formId, { answers: answers });
         resetForm();
         $("liveForm").classList.add("hidden");
         $("successBox").classList.remove("hidden");
+        $("successText").textContent = publicMode
+            ? "Thank you! Your answers have been sent."
+            : "Your answers are saved. Check them in the Responses section.";
         window.scrollTo(0, 0);
-    } else {
-        toast("Could not save. Browser storage may be full or blocked.");
+    } catch (err) {
+        console.error(err);
+        toast("Could not send. Check your internet / SCRIPT_URL and try again.");
     }
     btn.disabled = false;
 });
 
-$("anotherBtn").addEventListener("click", () => showView("fillView"));
+$("anotherBtn").addEventListener("click", () => {
+    if (publicMode) { renderForm(); $("liveForm").classList.remove("hidden"); $("successBox").classList.add("hidden"); window.scrollTo(0, 0); }
+    else showView("fillView");
+});
 
 
 /* =====================================================================
@@ -396,11 +416,13 @@ $("anotherBtn").addEventListener("click", () => showView("fillView"));
    ===================================================================== */
 let saveTimer;
 function persist() {
-    Store.saveSchema(schema);
     const s = $("saveState");
-    s.textContent = "Saved";
+    s.textContent = "Saving...";
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { s.textContent = "All changes saved"; }, 1200);
+    saveTimer = setTimeout(async () => {          // wait until typing pauses, then save once
+        try { await Store.saveForm(formId, schema); s.textContent = "All changes saved"; }
+        catch (e) { console.error(e); s.textContent = "Save failed"; toast("Could not save changes"); }
+    }, 1000);
 }
 
 // small field builders used inside every question card
@@ -576,7 +598,7 @@ function cellText(r, colId) {
 }
 
 function renderResponses() {
-    const data = Store.getResponses();
+    const data = responsesCache;
     const cols = getColumns(data);
     $("respTotal").textContent = data.length;
     $("respWord").textContent = data.length === 1 ? "response" : "responses";
@@ -599,8 +621,7 @@ function renderResponses() {
         const del = el("button", "del", "Delete");
         del.addEventListener("click", () => {
             if (confirm("Delete this response?")) {
-                Store.removeResponse(r.id);
-                renderResponses(); updateCount(); toast("Response deleted");
+                Store.removeResponse(formId, r.id).then(refreshResponses).then(() => toast("Response deleted")).catch(() => toast("Delete failed"));
             }
         });
         td.append(del); tr.append(td);
@@ -609,10 +630,9 @@ function renderResponses() {
 }
 
 $("deleteAllBtn").addEventListener("click", () => {
-    if (!Store.getResponses().length) return;
+    if (!responsesCache.length) return;
     if (confirm("Delete ALL responses? This cannot be undone.")) {
-        Store.clearResponses();
-        renderResponses(); updateCount(); toast("All responses deleted");
+        Store.clearResponses(formId).then(refreshResponses).then(() => toast("All responses deleted")).catch(() => toast("Delete failed"));
     }
 });
 
@@ -757,7 +777,7 @@ function buildXlsx(rows) {
 }
 
 $("exportBtn").addEventListener("click", () => {
-    const data = Store.getResponses();
+    const data = responsesCache;
     if (!data.length) { toast("No responses to export"); return; }
 
     const cols = getColumns(data);
@@ -768,12 +788,12 @@ $("exportBtn").addEventListener("click", () => {
 
     const url = URL.createObjectURL(buildXlsx(rows));
     const a = document.createElement("a");
-    a.href = url; a.download = "askly_responses.xlsx"; a.click();
+    a.href = url; a.download = (schema.title || "askly").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") + "_responses.xlsx"; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     toast("Excel file downloaded");
 });
 
-function updateCount() { $("responseCount").textContent = Store.getResponses().length; }
+function updateCount() { $("responseCount").textContent = responsesCache.length; }
 
 
 /* =====================================================================
@@ -788,16 +808,17 @@ function toast(msg) {
     snackTimer = setTimeout(() => s.classList.remove("show"), 2500);
 }
 
-const PAGE_NAMES = { fillView: "Fill Form", buildView: "Build Form", respView: "Responses" };
+const PAGE_NAMES = { formsView: "My Forms", fillView: "Preview Form", buildView: "Build Form", respView: "Responses" };
 
 function showView(id) {
     $("pageTitle").textContent = PAGE_NAMES[id];
-    ["fillView", "buildView", "respView"].forEach(v => $(v).classList.toggle("hidden", v !== id));
+    ["formsView", "fillView", "buildView", "respView"].forEach(v => $(v).classList.toggle("hidden", v !== id));
     document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === id));
 
     if (id === "fillView")  { renderForm(); $("liveForm").classList.remove("hidden"); $("successBox").classList.add("hidden"); }
-    if (id === "buildView") renderBuilder();
-    if (id === "respView")  renderResponses();
+    if (id === "formsView") renderFormsList();
+    if (id === "buildView") { renderBuilder(); updateShareLink(); }
+    if (id === "respView")  { renderResponses(); refreshResponses(); }
     window.scrollTo(0, 0);
 }
 document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => {
@@ -838,6 +859,142 @@ phoneQuery.addEventListener("change", () => {
 // start: closed on phones, open on desktop
 $("menuBtn").setAttribute("aria-expanded", String(!isPhone()));
 
-// start
-renderForm();
-updateCount();
+
+/* =====================================================================
+   PART 7 : SHARE LINK, MY FORMS, LOGIN, START-UP
+   ===================================================================== */
+function shareUrl(id) {
+    return location.origin + location.pathname + "?f=" + id;     // same page + form id
+}
+function updateShareLink() { $("shareLink").value = shareUrl(formId); }
+$("copyLinkBtn").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("shareLink").value); toast("Link copied"); }
+    catch (e) { $("shareLink").select(); document.execCommand("copy"); toast("Link copied"); }
+});
+$("openLinkBtn").addEventListener("click", () => window.open($("shareLink").value, "_blank"));
+
+// download the latest answers of the open form (also called every 15 seconds)
+async function refreshResponses() {
+    if (!formId || publicMode || !Store.loggedIn()) return;
+    try {
+        responsesCache = await Store.listResponses(formId);
+        updateCount();
+        if (!$("respView").classList.contains("hidden")) renderResponses();
+    } catch (e) { console.error(e); }
+}
+$("refreshBtn").addEventListener("click", async () => { await refreshResponses(); toast("Refreshed"); });
+setInterval(refreshResponses, 15000);
+
+// open one of my forms
+async function openForm(id) {
+    const data = await Store.getForm(id);
+    if (!data) { toast("Form not found"); return false; }
+    formId = id;
+    schema = { title: data.title || "", description: data.description || "", questions: data.questions || [] };
+    localStorage.setItem(Store.PREF_KEY, id);
+    responsesCache = [];
+    updateCount();
+    await refreshResponses();
+    return true;
+}
+
+async function renderFormsList() {
+    const forms = await Store.myForms();
+    const box = $("formsList"); box.textContent = "";
+    if (!forms.length) box.append(el("div", "empty-note", "No forms yet. Click + New form."));
+    forms.forEach(f => {
+        const row = el("div", "form-item" + (f.id === formId ? " current" : ""));
+        const info = el("div", "fi-info");
+        info.append(el("div", "fi-title", f.title || "Untitled form"),
+                    el("div", "muted", f.count + " questions" + (f.id === formId ? " - open now" : "")));
+        const btns = el("div", "fi-btns");
+        const b = (text, fn, cls) => { const x = el("button", "btn ghost small" + (cls ? " " + cls : ""), text); x.type = "button"; x.addEventListener("click", fn); return x; };
+        btns.append(
+            b("Edit", async () => { if (await openForm(f.id)) showView("buildView"); }),
+            b("Responses", async () => { if (await openForm(f.id)) showView("respView"); }),
+            b("Copy link", async () => { try { await navigator.clipboard.writeText(shareUrl(f.id)); toast("Link copied"); } catch (e) { prompt("Copy this link:", shareUrl(f.id)); } }),
+            b("Delete", async () => {
+                if (!confirm("Delete this form AND all its responses?")) return;
+                await Store.deleteForm(f.id);
+                if (f.id === formId) {
+                    const rest = await Store.myForms();
+                    if (rest.length) await openForm(rest[0].id); else await createAndOpen();
+                }
+                renderFormsList(); toast("Form deleted");
+            }, "danger")
+        );
+        row.append(info, btns); box.append(row);
+    });
+}
+async function createAndOpen() {
+    const id = await Store.createForm(defaultSchema());
+    await openForm(id);
+}
+$("newFormBtn").addEventListener("click", async () => {
+    const id = await Store.createForm({ title: "Untitled form", description: "", questions: [] });
+    await openForm(id);
+    showView("buildView");
+    toast("New form created");
+});
+
+/* ----- owner login (just one password) ----- */
+$("authForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    $("authError").textContent = "";
+    $("loginBtn").disabled = true;
+    try {
+        await Store.login($("authPass").value);
+        await startOwner();
+    } catch (err) { $("authError").textContent = err.message; }
+    $("loginBtn").disabled = false;
+});
+$("signOutBtn").addEventListener("click", () => {
+    Store.logout();
+    show("appRoot", false); show("authScreen", true);
+    $("authPass").value = "";
+});
+
+/* ----- start-up: decide between PUBLIC link mode and OWNER mode ----- */
+function show(id, on) { $(id).classList.toggle("hidden", !on); }
+
+async function startPublic(id) {
+    publicMode = true;
+    document.body.classList.add("public-mode");
+    try {
+        const data = await Store.getForm(id);
+        if (!data) { show("loadingScreen", false); show("notFoundScreen", true); return; }
+        formId = id;
+        schema = { title: data.title || "", description: data.description || "", questions: data.questions || [] };
+        document.title = schema.title || "Form";
+        ["formsView", "buildView", "respView"].forEach(v => $(v).classList.add("hidden"));
+        $("fillView").classList.remove("hidden");
+        renderForm();
+        show("loadingScreen", false); show("appRoot", true);
+    } catch (e) {
+        console.error(e);
+        show("loadingScreen", false); show("notFoundScreen", true);
+    }
+}
+
+async function startOwner() {
+    show("authScreen", false); show("loadingScreen", true);
+    const forms = await Store.myForms();
+    if (!forms.length) await createAndOpen();
+    else {
+        const saved = localStorage.getItem(Store.PREF_KEY);
+        await openForm(forms.some(f => f.id === saved) ? saved : forms[0].id);
+    }
+    show("loadingScreen", false); show("appRoot", true);
+    showView("formsView");
+}
+
+if (typeof SCRIPT_URL === "undefined" || SCRIPT_URL.indexOf("PASTE_") === 0) {
+    show("loadingScreen", false);
+    document.body.insertAdjacentHTML("afterbegin", '<p style="padding:30px;font-size:18px">Open <b>config.js</b> and paste your Web app URL in SCRIPT_URL.</p>');
+} else {
+    const linkId = new URLSearchParams(location.search).get("f");
+    if (linkId) startPublic(linkId);                         // anyone with the link: no login
+    else if (Store.loggedIn()) {                             // password still remembered in this tab
+        startOwner().catch(() => { Store.logout(); show("loadingScreen", false); show("authScreen", true); });
+    } else { show("loadingScreen", false); show("authScreen", true); }
+}

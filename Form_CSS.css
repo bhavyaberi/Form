@@ -390,3 +390,41 @@ tbody tr:hover { background: #f8fafc; }
 @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
 }
+
+
+/* =====================================================================
+   SHARING / LOGIN ADDITIONS
+   ===================================================================== */
+
+/* full-page screens: loading, login, not found */
+.screen { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+.spinner { width: 36px; height: 36px; border: 4px solid #cbd5e1; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.auth-box { width: 100%; max-width: 400px; }
+.auth-box .actions { margin-top: 14px; }
+.auth-error { min-height: 18px; margin-top: 6px; }
+.brand.dark { padding: 0 0 14px; border: none; margin: 0; color: var(--sidebar); }
+.google { width: 100%; margin-top: 10px; }
+
+/* sidebar footer */
+.side-foot .user-email { overflow-wrap: anywhere; margin-bottom: 8px; }
+.signout { color: #fff; border-color: rgba(255,255,255,.35); background: transparent; }
+
+/* share box */
+.share-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.share-row .field { flex: 1; min-width: 200px; }
+
+/* forms list */
+.form-item { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; margin-top: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.form-item.current { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(29,78,216,.15); }
+.form-item .fi-info { flex: 1; min-width: 160px; }
+.form-item .fi-title { font-weight: 600; overflow-wrap: anywhere; }
+.form-item .fi-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+#formsView { max-width: 820px; }
+
+/* PUBLIC MODE: someone opened the shared link -> only the form is shown */
+body.public-mode .sidebar,
+body.public-mode .topbar,
+body.public-mode .backdrop { display: none !important; }
+body.public-mode .main { padding-top: 24px; }
