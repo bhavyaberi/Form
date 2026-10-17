@@ -4,7 +4,7 @@
    PART 2 : Schema      -> the list of questions (default + new question)
    PART 3 : Fill form   -> draws questions from schema + validation
    PART 4 : Builder     -> add / edit / move / delete questions
-   PART 5 : Responses   -> table, delete, CSV export
+   PART 5 : Responses   -> table, delete, Excel export
    PART 6 : Navigation + start-up
    ===================================================================== */
 
@@ -616,24 +616,161 @@ $("deleteAllBtn").addEventListener("click", () => {
     }
 });
 
-function csvCell(value) {
-    let s = String(value == null ? "" : value);
-    if (/^[=+\-@]/.test(s)) s = "'" + s;           // stops Excel formula injection
-    return '"' + s.replace(/"/g, '""') + '"';
+/* ----- Export to real Excel (.xlsx) -----
+   An .xlsx file is just a ZIP of small XML files. We build those XML files
+   as strings and pack them with a tiny ZIP writer (no library, works offline). */
+
+// CRC32 checksum (ZIP needs it for every file inside)
+const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+    }
+    return t;
+})();
+function crc32(bytes) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
 }
+
+// Pack [{name, data}] into one ZIP file (no compression = simplest and fine for small data)
+function makeZip(files) {
+    const enc = new TextEncoder();
+    const parts = [], central = [];
+    let offset = 0;
+    const now = new Date();
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+
+    files.forEach(f => {
+        const name = enc.encode(f.name), data = enc.encode(f.data), crc = crc32(data);
+
+        const lh = new DataView(new ArrayBuffer(30));          // local file header
+        lh.setUint32(0, 0x04034b50, true);  lh.setUint16(4, 20, true);  lh.setUint16(6, 0x0800, true);
+        lh.setUint16(8, 0, true);           lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true);
+        lh.setUint32(14, crc, true);        lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true);
+        lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+        parts.push(new Uint8Array(lh.buffer), name, data);
+
+        const ch = new DataView(new ArrayBuffer(46));          // central directory entry
+        ch.setUint32(0, 0x02014b50, true);  ch.setUint16(4, 20, true);  ch.setUint16(6, 20, true);
+        ch.setUint16(8, 0x0800, true);      ch.setUint16(10, 0, true);  ch.setUint16(12, dosTime, true);
+        ch.setUint16(14, dosDate, true);    ch.setUint32(16, crc, true);
+        ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true);
+        ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+        central.push(new Uint8Array(ch.buffer), name);
+
+        offset += 30 + name.length + data.length;
+    });
+
+    const cdSize = central.reduce((sum, a) => sum + a.length, 0);
+    const end = new DataView(new ArrayBuffer(22));             // end of central directory
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);  end.setUint16(10, files.length, true);
+    end.setUint32(12, cdSize, true);       end.setUint32(16, offset, true);
+
+    return new Blob(parts.concat(central, [new Uint8Array(end.buffer)]),
+        { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+// 0 -> A, 1 -> B, ... 26 -> AA
+function colLetter(n) {
+    let s = "";
+    for (n++; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s;
+    return s;
+}
+function xmlEsc(v) {
+    return String(v == null ? "" : v)
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")   // characters XML does not allow
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// rows = array of arrays (first row = headers)
+function buildXlsx(rows) {
+    const colCount = rows[0].length;
+
+    // column widths based on the longest text in each column
+    let colsXml = "";
+    for (let c = 0; c < colCount; c++) {
+        const longest = Math.max(...rows.map(r => String(r[c] == null ? "" : r[c]).length));
+        colsXml += '<col min="' + (c + 1) + '" max="' + (c + 1) + '" width="' + Math.min(Math.max(longest + 3, 12), 50) + '" customWidth="1"/>';
+    }
+
+    // every value is stored as text, so phone numbers keep leading zeros and nothing is read as a formula
+    let sheetData = "";
+    rows.forEach((row, r) => {
+        sheetData += '<row r="' + (r + 1) + '">';
+        row.forEach((val, c) => {
+            const text = String(val == null ? "" : val);
+            if (text === "") return;                                  // skip empty cells
+            sheetData += '<c r="' + colLetter(c) + (r + 1) + '" t="inlineStr"' + (r === 0 ? ' s="1"' : "") +
+                         '><is><t xml:space="preserve">' + xmlEsc(text) + '</t></is></c>';
+        });
+        sheetData += "</row>";
+    });
+
+    const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+    const HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    return makeZip([
+        { name: "[Content_Types].xml", data: HEAD +
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+            '<Default Extension="xml" ContentType="application/xml"/>' +
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+            '</Types>' },
+        { name: "_rels/.rels", data: HEAD +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            '<Relationship Id="rId1" Type="' + REL + '/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+        { name: "xl/workbook.xml", data: HEAD +
+            '<workbook ' + NS + ' xmlns:r="' + REL + '"><sheets><sheet name="Responses" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+        { name: "xl/_rels/workbook.xml.rels", data: HEAD +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+            '<Relationship Id="rId1" Type="' + REL + '/worksheet" Target="worksheets/sheet1.xml"/>' +
+            '<Relationship Id="rId2" Type="' + REL + '/styles" Target="styles.xml"/></Relationships>' },
+        // styles: style 0 = normal, style 1 = bold header with light blue background
+        { name: "xl/styles.xml", data: HEAD +
+            '<styleSheet ' + NS + '>' +
+            '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+            '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+            '<fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F7"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+            '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+            '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+            '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs>' +
+            '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+            '</styleSheet>' },
+        { name: "xl/worksheets/sheet1.xml", data: HEAD +
+            '<worksheet ' + NS + '>' +
+            '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+            '<cols>' + colsXml + '</cols>' +
+            '<sheetData>' + sheetData + '</sheetData>' +
+            '<autoFilter ref="A1:' + colLetter(colCount - 1) + rows.length + '"/>' +
+            '</worksheet>' }
+    ]);
+}
+
 $("exportBtn").addEventListener("click", () => {
     const data = Store.getResponses();
     if (!data.length) { toast("No responses to export"); return; }
-    const cols = getColumns(data);
-    const rows = [["Timestamp"].concat(cols.map(c => c.label))];
-    data.forEach(r => rows.push([r.submittedAt].concat(cols.map(c => cellText(r, c.id)))));
-    const csv = rows.map(row => row.map(csvCell).join(",")).join("\r\n");
 
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
+    const cols = getColumns(data);
+    const rows = [["Submitted at"].concat(cols.map(c => c.label))];
+    data.forEach(r => rows.push(
+        [new Date(r.submittedAt).toLocaleString()].concat(cols.map(c => cellText(r, c.id)))
+    ));
+
+    const url = URL.createObjectURL(buildXlsx(rows));
     const a = document.createElement("a");
-    a.href = url; a.download = "askly_responses.csv"; a.click();
-    URL.revokeObjectURL(url);
+    a.href = url; a.download = "askly_responses.xlsx"; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("Excel file downloaded");
 });
 
 function updateCount() { $("responseCount").textContent = Store.getResponses().length; }
