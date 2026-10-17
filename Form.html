@@ -2,68 +2,136 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Validation Form</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#12284c">
+    <title>Askly</title>
     <link rel="stylesheet" href="Form_CSS.css">
-   
 </head>
 <body>
-    <h2 style="text-align: center; font-family: cursive; font-size: 30px;">Login Form</h2>
-    
-    <form id="myform" onsubmit="return validateForm()">
-        
-        <label >Full Name:</label>
-        <input text id="name" placeholder="Enter your name">
-        <div class="error" id="nameError"></div><br>
+<div class="app">
 
-        <label >Date of Birth:</label>
-        <input type="date" id="dob">
-        <div class="error" id="dobError"></div>
-        <br>
+    <!-- ============ VERTICAL SIDEBAR ============ -->
+    <aside class="sidebar" id="sidebar">
+        <button type="button" class="side-close" id="sideClose" aria-label="Close menu">&times;</button>
+        <div class="brand">
+            <span class="logo">A</span>
+            <div>
+                <b>Askly</b>
+                <small>Build and collect answers</small>
+            </div>
+        </div>
 
-        <label >Gender:</label>
-        <input type="radio" id="male" name="gender" style="width: 5%;" checked> Male 
-        <input type="radio" id="female" name="gender" style="width: 5%"> Female
-        <input type="radio" id="female" name="gender" style="width: 5%"> Prefer not to say
-        <br><br>
+        <nav class="nav">
+            <button type="button" class="nav-btn active" data-view="fillView">
+                <span class="txt">Fill Form</span>
+            </button>
+            <button type="button" class="nav-btn" data-view="buildView">
+                <span class="txt">Build Form</span>
+            </button>
+            <button type="button" class="nav-btn" data-view="respView">
+                <span class="txt">Responses</span>
+                <span class="badge" id="responseCount">0</span>
+            </button>
+        </nav>
 
-        <label >Email Address:</label>
-        <input type="text" id="email" placeholder="abc@example.com">
-        <div class="error" id="emailError"></div><br>
+        <div class="side-foot">Everything is saved only in this browser.</div>
+    </aside>
 
-        <label >Phone Number:</label>
-        <input type="text" id="phone" placeholder="XXXXXXX123">
-        <div class="error" id="phoneError"></div><br>
-      
-        <label >City:</label>
-        <select name="city" id="city" style="padding: 5px;" onchange="othercity()">
-            <option value="">Select</option>
-            <option value="phg">Phagwara</option>
-            <option value="jal">Jalandhar</option>
-            <option value="chd">Chandigarh</option>
-            <option value="ldh">Ludhiana</option>
-            <option value="amr">Amritsar</option>
-            <option value="Other">Other</option>
-        </select>
-        <input type="text" id="otherCity" placeholder="Enter your city" style="display:none;">
-        <div class="error" id="cityError"></div>
-        <br><br>
+    <!-- dark overlay behind the menu on phones -->
+    <div class="backdrop" id="backdrop"></div>
 
-        <label >Address:</label>
-        <input type="text" id="address" placeholder="Enter your address">
-        <div class="error" id="addressError"></div><br>
+    <div class="content">
+    <!-- ============ TOP BAR WITH HAMBURGER ============ -->
+    <header class="topbar">
+        <button type="button" class="menu-btn" id="menuBtn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">
+            <span></span><span></span><span></span>
+        </button>
+        <span class="top-brand">Askly</span>
+        <span class="top-sep">/</span>
+        <span class="top-page" id="pageTitle">Fill Form</span>
+    </header>
 
-         <label >Password:</label>
-        <input type="password" id="password" placeholder="Password">
-        <div class="error" id="passError"></div><br>
+    <!-- ============ MAIN AREA ============ -->
+    <main class="main">
 
-        <label >Confirm Password:</label>
-        <input type="password" id="confirmPassword" placeholder="Confirm Password">
-        <div class="error" id="confirmPassError"></div><br>
+        <!-- ===== VIEW 1: FILL FORM ===== -->
+        <section id="fillView" class="view">
+            <form id="liveForm" novalidate>
+                <div class="hero">
+                    <h1 id="formTitle"></h1>
+                    <p id="formDesc"></p>
+                </div>
 
-        <button type="submit" id="submit" onclick="showMessage()">Submit</button>
-   
-    </form>
-     <script src="Form_script.js"></script>
+                <div id="questions"></div>
+
+                <div class="actions" id="formActions">
+                    <button type="submit" class="btn primary" id="submitBtn">Submit</button>
+                    <button type="button" class="btn ghost" id="clearBtn">Clear form</button>
+                </div>
+            </form>
+
+            <div class="success hidden" id="successBox">
+                <div class="tick">&#10003;</div>
+                <h2>Response submitted</h2>
+                <p>Your answers are saved. Check them in the Responses section.</p>
+                <button type="button" class="btn primary" id="anotherBtn">Submit another response</button>
+            </div>
+        </section>
+
+        <!-- ===== VIEW 2: BUILD FORM ===== -->
+        <section id="buildView" class="view hidden">
+            <div class="panel">
+                <div class="panel-head">
+                    <h2>Form settings</h2>
+                    <span class="save-state" id="saveState">All changes saved</span>
+                </div>
+                <label class="lbl" for="bTitle">Form title</label>
+                <input type="text" id="bTitle" class="field" placeholder="Form title">
+                <label class="lbl" for="bDesc">Description</label>
+                <textarea id="bDesc" class="field" rows="2" placeholder="Short description"></textarea>
+            </div>
+
+            <div id="builderList"></div>
+
+            <div class="panel add-panel">
+                <h2>Add a question</h2>
+                <p class="muted">Click a type to add it to the end of your form.</p>
+                <div class="chips" id="addChips"></div>
+            </div>
+
+            <div class="build-foot">
+                <button type="button" class="btn ghost" id="resetSchemaBtn">Reset to default questions</button>
+            </div>
+        </section>
+
+        <!-- ===== VIEW 3: RESPONSES ===== -->
+        <section id="respView" class="view hidden">
+            <div class="panel resp-head">
+                <div>
+                    <div class="resp-count"><span id="respTotal">0</span> <span id="respWord">responses</span></div>
+                    <div class="muted">Saved locally in this browser (localStorage)</div>
+                </div>
+                <div class="resp-actions">
+                    <button type="button" class="btn ghost" id="exportBtn">Download CSV</button>
+                    <button type="button" class="btn danger" id="deleteAllBtn">Delete all</button>
+                </div>
+            </div>
+
+            <div class="panel table-panel">
+                <div class="table-wrap">
+                    <table id="respTable">
+                        <thead id="respHead"></thead>
+                        <tbody id="respBody"></tbody>
+                    </table>
+                </div>
+                <div class="empty" id="emptyMsg">No responses yet. Fill the form to see data here.</div>
+            </div>
+        </section>
+    </main>
+    </div>
+</div>
+
+<div class="snackbar" id="snackbar"></div>
+<script src="Form_script.js"></script>
 </body>
 </html>

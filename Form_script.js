@@ -1,250 +1,706 @@
-//Checks after any change in input i.e. delete, add, backspace or any action
-document.getElementById("name").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+/* =====================================================================
+   Form_script.js  (Askly)
+   PART 1 : Store       -> local backend (localStorage)
+   PART 2 : Schema      -> the list of questions (default + new question)
+   PART 3 : Fill form   -> draws questions from schema + validation
+   PART 4 : Builder     -> add / edit / move / delete questions
+   PART 5 : Responses   -> table, delete, CSV export
+   PART 6 : Navigation + start-up
+   ===================================================================== */
 
-document.getElementById("dob").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+const $ = id => document.getElementById(id);
 
-document.getElementById("email").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+// Tiny helper to create an element:  el("div", "class-name", "text")
+function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;   // textContent = safe, never runs HTML
+    return e;
+}
 
-document.getElementById("password").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+/* =====================================================================
+   PART 1 : LOCAL BACKEND
+   localStorage keeps strings, so arrays/objects go through JSON.
+   Two keys: one for the question list (schema), one for responses.
+   ===================================================================== */
+const Store = {
+    SCHEMA_KEY: "formcraft_schema_v1",
+    RESP_KEY:   "formcraft_responses_v1",
 
-document.getElementById("confirmPassword").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+    _read(key, fallback) {
+        try {
+            const raw = localStorage.getItem(key);
+            return raw ? JSON.parse(raw) : fallback;
+        } catch (e) {
+            console.error("Read failed", e);
+            return fallback;
+        }
+    },
+    _write(key, value) {
+        try {
+            localStorage.setItem(key, JSON.stringify(value));
+            return true;
+        } catch (e) {
+            console.error("Write failed", e);
+            return false;
+        }
+    },
 
-document.getElementById("phone").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+    // ----- schema (questions) -----
+    getSchema()      { return this._read(this.SCHEMA_KEY, null); },
+    saveSchema(s)    { return this._write(this.SCHEMA_KEY, s); },
 
-document.getElementById("city").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+    // ----- responses -----
+    getResponses()   { return this._read(this.RESP_KEY, []); },
+    addResponse(r) {
+        const all = this.getResponses();
+        r.id = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+        r.submittedAt = new Date().toISOString();
+        all.push(r);
+        return this._write(this.RESP_KEY, all);
+    },
+    removeResponse(id) { return this._write(this.RESP_KEY, this.getResponses().filter(r => r.id !== id)); },
+    clearResponses()   { localStorage.removeItem(this.RESP_KEY); }
+};
 
-document.getElementById("otherCity").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
+// Passwords are never saved as plain text. We save a SHA-256 hash only.
+async function hashText(text) {
+    if (!window.crypto || !crypto.subtle) return "(not stored)";
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
 
-document.getElementById("address").addEventListener("input", function () {
-    if (submitted) validateForm();
-});
 
-//Sets border: Green for valid, Red for invalid 
-function setBorder(id, valid) {
-    let e = document.getElementById(id);
-    if (valid) {
-        e.style.border = "2px solid green";
+/* =====================================================================
+   PART 2 : SCHEMA (what questions the form has)
+   ===================================================================== */
+const OTHER = "__other__";   // special value used for the "Other" option
+
+const TYPES = {
+    text:      "Short text",
+    paragraph: "Paragraph",
+    email:     "Email",
+    phone:     "Phone (10 digits)",
+    number:    "Number",
+    date:      "Date",
+    radio:     "Single choice",
+    checkbox:  "Multiple choice",
+    dropdown:  "Dropdown",
+    password:  "Password"
+};
+const isChoice = t => t === "radio" || t === "checkbox" || t === "dropdown";
+
+function uid() { return "q" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+// One new question with safe defaults
+function newQuestion(type) {
+    return {
+        id: uid(), type: type, label: "Untitled question", required: false,
+        placeholder: "", options: isChoice(type) ? ["Option 1", "Option 2"] : [],
+        minLength: 0, lettersOnly: false, minAge: 0, min: "", max: "",
+        allowOther: false, confirm: false
+    };
+}
+
+// Your ORIGINAL registration form, rebuilt as questions
+function defaultSchema() {
+    const mk = (type, label, extra) => Object.assign(newQuestion(type), { label: label }, extra);
+    return {
+        title: "Registration Form",
+        description: "Fill in your details below. Questions marked with * are required.",
+        questions: [
+            mk("text",     "Full Name",     { required: true, minLength: 3, lettersOnly: true, placeholder: "Enter your name" }),
+            mk("date",     "Date of Birth", { required: true, minAge: 16 }),
+            mk("radio",    "Gender",        { options: ["Male", "Female", "Prefer not to say"] }),
+            mk("email",    "Email Address", { required: true, placeholder: "abc@example.com" }),
+            mk("phone",    "Phone Number",  { required: true, placeholder: "10 digit number" }),
+            mk("dropdown", "City",          { required: true, options: ["Phagwara", "Jalandhar", "Chandigarh", "Ludhiana", "Amritsar"], allowOther: true }),
+            mk("text",     "Address",       { required: true, minLength: 10, placeholder: "Enter your address" }),
+            mk("password", "Password",      { required: true, confirm: true, placeholder: "Min 8 chars: A-Z, a-z, 0-9, special" })
+        ]
+    };
+}
+
+let schema = Store.getSchema() || defaultSchema();
+if (!Array.isArray(schema.questions)) schema = defaultSchema();   // safety if storage is corrupted
+
+
+/* =====================================================================
+   PART 3 : FILL FORM  (draw questions + validate)
+   ===================================================================== */
+let submitted = false;
+
+function buildQuestion(q, index) {
+    const wrap = el("div", "q");
+    wrap._q = q;                                   // remember which question this card belongs to
+
+    wrap.append(el("span", "q-num", index + 1));
+
+    const label = el("label", "q-label", q.label || "Untitled question");
+    label.htmlFor = "f_" + q.id;
+    if (q.required) label.append(el("span", "req", "*"));
+    wrap.append(label);
+
+    const t = q.type;
+
+    if (t === "radio" || t === "checkbox") {
+        // vertical list of selectable tiles
+        const tiles = el("div", "tiles");
+        const opts = q.options.slice();
+        if (t === "radio" && q.allowOther) opts.push(OTHER);
+        opts.forEach(opt => {
+            const tile = el("label", "tile" + (t === "checkbox" ? " chk" : ""));
+            const input = el("input");
+            input.type = t;
+            input.name = q.id;
+            input.value = opt;
+            tile.append(input, el("span", "mark"), el("span", "", opt === OTHER ? "Other" : opt));
+            tiles.append(tile);
+        });
+        if (!opts.length) tiles.append(el("div", "muted", "(No options added yet)"));
+        wrap.append(tiles);
+    }
+    else if (t === "dropdown") {
+        const sel = el("select", "field");
+        sel.id = "f_" + q.id;
+        const first = el("option", "", "Choose");
+        first.value = "";
+        sel.append(first);
+        q.options.forEach(opt => { const o = el("option", "", opt); o.value = opt; sel.append(o); });
+        if (q.allowOther) { const o = el("option", "", "Other"); o.value = OTHER; sel.append(o); }
+        wrap.append(sel);
+    }
+    else if (t === "paragraph") {
+        const ta = el("textarea", "field");
+        ta.id = "f_" + q.id; ta.rows = 3; ta.placeholder = q.placeholder || "Your answer";
+        wrap.append(ta);
+    }
+    else {
+        const input = el("input", "field");
+        input.id = "f_" + q.id;
+        input.type = (t === "date") ? "date" : (t === "password") ? "password" : "text";
+        input.placeholder = q.placeholder || "Your answer";
+        if (t === "phone")  { input.inputMode = "numeric"; input.maxLength = 10; }
+        if (t === "number") { input.inputMode = "decimal"; }
+        wrap.append(input);
+
+        if (t === "password" && q.confirm) {
+            const c = el("input", "confirm-field");
+            c.type = "password"; c.placeholder = "Confirm password";
+            wrap.append(c);
+        }
+    }
+
+    // text box for "Other" (hidden until Other is picked)
+    if (q.allowOther && (t === "radio" || t === "dropdown")) {
+        const o = el("input", "other-input hidden");
+        o.type = "text"; o.placeholder = "Type your answer";
+        wrap.append(o);
+    }
+
+    wrap.append(el("div", "error"));
+    return wrap;
+}
+
+function renderForm() {
+    $("formTitle").textContent = schema.title || "Untitled form";
+    $("formDesc").textContent = schema.description || "";
+    const box = $("questions");
+    box.textContent = "";
+    schema.questions.forEach((q, i) => box.append(buildQuestion(q, i)));
+    $("formActions").classList.toggle("hidden", schema.questions.length === 0);
+    if (!schema.questions.length) box.append(el("div", "empty-note", "This form has no questions yet. Go to Build Form and add some."));
+    submitted = false;
+}
+
+// ----- read the answer of one question -----
+function isOtherSelected(q, wrap) {
+    if (q.type === "radio")    { const c = wrap.querySelector("input[type=radio]:checked"); return !!c && c.value === OTHER; }
+    if (q.type === "dropdown") { return wrap.querySelector("select").value === OTHER; }
+    return false;
+}
+function readValue(q, wrap) {
+    switch (q.type) {
+        case "radio": {
+            const c = wrap.querySelector("input[type=radio]:checked");
+            if (!c) return "";
+            return c.value === OTHER ? wrap.querySelector(".other-input").value.trim() : c.value;
+        }
+        case "checkbox":
+            return Array.from(wrap.querySelectorAll("input[type=checkbox]:checked")).map(c => c.value);
+        case "dropdown": {
+            const s = wrap.querySelector("select");
+            return s.value === OTHER ? wrap.querySelector(".other-input").value.trim() : s.value;
+        }
+        default:
+            return wrap.querySelector(".field").value.trim();
+    }
+}
+const isEmpty = v => Array.isArray(v) ? v.length === 0 : v === "";
+
+// ----- rules for each type: returns an error message, or "" if OK -----
+function checkValue(q, v) {
+    if (isEmpty(v)) return q.required ? "This question is required" : "";
+
+    switch (q.type) {
+        case "text":
+        case "paragraph":
+            if (q.minLength && v.length < q.minLength) return "Minimum " + q.minLength + " characters needed";
+            if (q.lettersOnly && !/^[A-Za-z ]+$/.test(v)) return "Only letters (A-Z / a-z) and spaces allowed";
+            break;
+        case "email":
+            if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(v)) return "Enter a valid email id";
+            break;
+        case "phone":
+            if (!/^[0-9]{10}$/.test(v)) return "Phone number must be 10 digits";
+            break;
+        case "number": {
+            if (isNaN(Number(v))) return "Enter a valid number";
+            if (q.min !== "" && Number(v) < q.min) return "Number must be at least " + q.min;
+            if (q.max !== "" && Number(v) > q.max) return "Number must be at most " + q.max;
+            break;
+        }
+        case "date":
+            if (q.minAge) {
+                const today = new Date();
+                const limit = new Date(today.getFullYear() - q.minAge, today.getMonth(), today.getDate());
+                if (new Date(v) > limit) return "You should be " + q.minAge + " years or above";
+            }
+            break;
+        case "password":
+            if (v.length < 8) return "Password must be at least 8 characters";
+            if (!/^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&#^])[A-Za-z\d@$!%*?&#^]{8,20}$/.test(v))
+                return "Use 8-20 chars with Uppercase, Lowercase, Digit and Special character (@$!%*?&#^)";
+            break;
+    }
+    return "";
+}
+
+// Validate one card: shows the message + red/green state. Returns true/false.
+function validateQuestion(wrap) {
+    const q = wrap._q;
+    const v = readValue(q, wrap);
+    let msg = "";
+
+    if (q.allowOther && isOtherSelected(q, wrap) && v === "") {
+        msg = "Please type your answer for 'Other'";
     } else {
-        e.style.border = "2px solid red";
+        msg = checkValue(q, v);
+        if (!msg && q.type === "password" && q.confirm && v !== "") {
+            const c = wrap.querySelector(".confirm-field").value.trim();
+            if (c === "") msg = "Please confirm your password";
+            else if (c !== v) msg = "Passwords do not match";
+        }
     }
+
+    wrap.querySelector(".error").textContent = msg;
+    wrap.classList.toggle("invalid", msg !== "");
+    wrap.classList.toggle("ok", msg === "" && !isEmpty(v));
+    return msg === "";
 }
 
-
-// Display input box for 'Other' city
-function othercity() {
-    var select = document.getElementById("city");
-    var other = document.getElementById("otherCity");
-
-    if (select.value == "Other") {
-        other.style.display = "block";  //show textbox
-    } else {
-        other.style.display = "none";   //hide textbox
-        other.value = "";
+function validateAll() {
+    let firstBad = null;
+    document.querySelectorAll("#questions .q").forEach(wrap => {
+        if (!validateQuestion(wrap) && !firstBad) firstBad = wrap;
+    });
+    if (firstBad) {
+        firstBad.scrollIntoView({ behavior: "smooth", block: "center" });
+        const f = firstBad.querySelector("input, select, textarea");
+        if (f) f.focus({ preventScroll: true });
     }
+    return firstBad === null;
 }
 
-//Main Validation 
-function validateForm() {
+// ----- live validation (event delegation: ONE listener for the whole form) -----
+const liveForm = $("liveForm");
+function cardOf(e) { return e.target.closest ? e.target.closest(".q") : null; }
 
-    //Clear all previous errors
-    document.getElementById("nameError").innerHTML = "";
-    document.getElementById("dobError").innerHTML = "";
-    document.getElementById("emailError").innerHTML = "";
-    document.getElementById("passError").innerHTML = "";
-    document.getElementById("confirmPassError").innerHTML = "";
-    document.getElementById("phoneError").innerHTML = "";
-    document.getElementById("cityError").innerHTML = "";
-    document.getElementById("addressError").innerHTML = "";
-
-    //Reading input values
-    //Clear Spaces which are extra and save info. in variables
-    let name = document.getElementById('name').value.trim();
-    let dob = document.getElementById('dob').value.trim();
-    let email = document.getElementById('email').value.trim();
-    let password = document.getElementById('password').value.trim();
-    let confirmPassword = document.getElementById('confirmPassword').value.trim();
-    let phone = document.getElementById('phone').value.trim();
-    let city = document.getElementById('city').value.trim();
-    let otherCity = document.getElementById('otherCity').value.trim();
-    let address = document.getElementById('address').value.trim();
-
-    //Flag
-    let isValid = true;
-
-    //Validate Name (Min. 3 + Only alphabets + Underscore(_))
-    if (name.length < 3) {
-        document.getElementById("nameError").innerHTML = "Name should have atleast 3 characters.";
-        setBorder("name", false);
-        isValid = false;
+liveForm.addEventListener("input", e => {
+    const w = cardOf(e);
+    if (w && (submitted || w.classList.contains("touched"))) validateQuestion(w);
+});
+liveForm.addEventListener("change", e => {
+    const w = cardOf(e);
+    if (!w) return;
+    // show / hide the "Other" text box
+    const other = w.querySelector(".other-input");
+    if (other) {
+        const show = isOtherSelected(w._q, w);
+        other.classList.toggle("hidden", !show);
+        if (!show) other.value = "";
+        else other.focus();
     }
+    w.classList.add("touched");
+    validateQuestion(w);
+});
+liveForm.addEventListener("focusout", e => {
+    const w = cardOf(e);
+    if (!w) return;
+    if (e.relatedTarget && w.contains(e.relatedTarget)) return;   // still inside same card
+    w.classList.add("touched");
+    if (submitted || !isEmpty(readValue(w._q, w))) validateQuestion(w);
+});
 
-    else {
-        let namePattern = /^[A-Za-z ]+$/;
-        if (!name.match(namePattern)) {
-            document.getElementById("nameError").innerHTML = "Name should only contain alphabets (A-Z/a-z)";
-            setBorder("name", false);
-            isValid = false;
-        }
-        else {
-            setBorder("name", true);
-        }
-    }
-
-    // Date of Birth Validation
-    // Must be 16 years or older
-    if (dob === "") {
-        document.getElementById("dobError").innerHTML = "Select Date of Birth";
-        setBorder("dob", false);
-        isValid = false;
-    }
-    else {
-        const date = new Date(dob);
-        const today = new Date();
-        const minDate = new Date(today.getFullYear() - 16, today.getMonth(), today.getDate());
-
-        if (date > minDate) {
-            document.getElementById("dobError").innerHTML = "You should be 16 years or above";
-            setBorder("dob", false);
-            isValid = false;
-
-        }
-        else {
-            setBorder("dob", true);
-        }
-    }
-
-    // Email Validation
-    // Basic pattern check for format
-    let emailPattern = /^[^ ]+@[^ ]+\.[a-z]{2,3}$/;
-    if (!email.match(emailPattern)) {
-        document.getElementById("emailError").innerHTML = "Enter a valid email id ";
-        setBorder("email", false);
-        isValid = false;
-    }
-    else {
-        setBorder("email", true);
-    }
-
-    // Password Validation
-    // Must include uppercase, lowercase, digit, special char
-    let passwordPattern = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&#^])[A-Za-z\d@$!%*?&#^]{8,20}$/;
-
-    if (password.length < 8) {
-        document.getElementById("passError").innerHTML = "Password must be at least 8 characters";
-        setBorder("password", false);
-        isValid = false;
-    }
-
-    else if (!password.match(passwordPattern)) {
-        document.getElementById("passError").innerHTML = "Enter a password containing Uppercase, Lowercase, Digit and Special characters";
-        setBorder("password", false);
-        isValid = false;
-    }
-
-    else {
-        setBorder("password", true);
-    }
-
-    // Confirm Password Validation
-    if (confirmPassword === "") {
-        document.getElementById("confirmPassError").innerHTML = "Enter Confirm Password";
-        setBorder("confirmPassword", false);
-        isValid = false;
-    }
-
-    else if (password !== confirmPassword) {
-        document.getElementById("confirmPassError").innerHTML = "Passwords do not match";
-        setBorder("confirmPassword", false);
-        isValid = false;
-    }
-
-    else {
-        setBorder("confirmPassword", true);
-    }
-
-    // Phone Number Validation
-    // Only 10 digits allowed
-    let phonePattern = /^[0-9]{10}$/;
-    if (!phone.match(phonePattern)) {
-        document.getElementById("phoneError").innerHTML = "Phone number must be 10 digits";
-        setBorder("phone", false);
-        isValid = false;
-    }
-    else {
-        setBorder("phone", true);
-    }
-
-    // City Validation
-    // Must not be empty
-    if (city == "") {
-        document.getElementById("cityError").innerHTML = "Select city";
-        setBorder("city", false);
-        isValid = false;
-    }
-
-    else if (city == "Other") {
-
-        let cityPattern = /^[A-Za-z ]+$/;
-
-        if (otherCity == "") {
-            document.getElementById("cityError").innerHTML = "Enter city name";
-            setBorder("city", false);
-            isValid = false;
-        }
-
-        // NOT MATCH (simple way)
-        else if (!otherCity.match(cityPattern)) {
-            document.getElementById("cityError").innerHTML = "Only letters allowed";
-            setBorder("city", false);
-            isValid = false;
-        }
-
-        else {
-            setBorder("city", true);
-        }
-    }
-
-    else {
-        setBorder("city", true);
-    }
-
-    // Address Validation
-    // Minimum 10 characters
-    if (address.length < 10) {
-        document.getElementById("addressError").innerHTML = "Address must be at least 10 characters";
-        setBorder("address", false);
-        isValid = false;
-    }
-    else {
-        setBorder("address", true);
-    }
-
-    //Return final Validation
-    return isValid;
-
+function resetForm() {
+    liveForm.reset();
+    submitted = false;
+    document.querySelectorAll("#questions .q").forEach(w => {
+        w.classList.remove("invalid", "ok", "touched");
+        w.querySelector(".error").textContent = "";
+        const o = w.querySelector(".other-input");
+        if (o) o.classList.add("hidden");
+    });
 }
+$("clearBtn").addEventListener("click", () => {
+    if (confirm("This will clear all your answers. Continue?")) resetForm();
+});
 
-//Final message on successful registration
-function showMessage() {
+// ----- SUBMIT -----
+liveForm.addEventListener("submit", async e => {
+    e.preventDefault();                 // stop page reload
     submitted = true;
+    if (!validateAll()) return;
 
-    if (validateForm()) {
-        alert("Registration Successful!");
+    const btn = $("submitBtn");
+    btn.disabled = true;
+
+    // one response = list of answers (we keep the label too, so old data stays readable
+    // even if you rename or delete the question later)
+    const answers = [];
+    for (const wrap of document.querySelectorAll("#questions .q")) {
+        const q = wrap._q;
+        let value = readValue(q, wrap);
+        const secret = q.type === "password";
+        if (secret && value !== "") value = await hashText(value);
+        answers.push({ id: q.id, label: q.label, type: q.type, value: value, secret: secret });
     }
+
+    if (Store.addResponse({ answers: answers })) {
+        updateCount();
+        resetForm();
+        $("liveForm").classList.add("hidden");
+        $("successBox").classList.remove("hidden");
+        window.scrollTo(0, 0);
+    } else {
+        toast("Could not save. Browser storage may be full or blocked.");
+    }
+    btn.disabled = false;
+});
+
+$("anotherBtn").addEventListener("click", () => showView("fillView"));
+
+
+/* =====================================================================
+   PART 4 : BUILDER (add / edit / move / delete questions)
+   ===================================================================== */
+let saveTimer;
+function persist() {
+    Store.saveSchema(schema);
+    const s = $("saveState");
+    s.textContent = "Saved";
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { s.textContent = "All changes saved"; }, 1200);
 }
+
+// small field builders used inside every question card
+function numField(q, key, labelText) {
+    const box = el("label", "fld");
+    box.append(el("span", "", labelText));
+    const i = el("input"); i.type = "number"; i.value = q[key];
+    i.addEventListener("input", () => {
+        // min/max can be empty (= no limit), others default to 0
+        q[key] = i.value === "" ? (key === "min" || key === "max" ? "" : 0) : Number(i.value);
+        persist();
+    });
+    box.append(i);
+    return box;
+}
+function textField(q, key, labelText) {
+    const box = el("label", "fld");
+    box.append(el("span", "", labelText));
+    const i = el("input"); i.type = "text"; i.value = q[key] || "";
+    i.addEventListener("input", () => { q[key] = i.value; persist(); });
+    box.append(i);
+    return box;
+}
+function checkField(q, key, labelText, extraClass) {
+    const row = el("label", "check-row" + (extraClass ? " " + extraClass : ""));
+    const c = el("input"); c.type = "checkbox"; c.checked = !!q[key];
+    c.addEventListener("change", () => { q[key] = c.checked; persist(); });
+    row.append(c, el("span", "", labelText));
+    return row;
+}
+
+function buildCard(q, i) {
+    const card = el("div", "b-card");
+
+    // top row: number + question text + type dropdown
+    const top = el("div", "b-top");
+    top.append(el("span", "q-num small", i + 1));
+
+    const label = el("input", "b-label");
+    label.type = "text"; label.value = q.label; label.placeholder = "Question text";
+    label.addEventListener("input", () => { q.label = label.value; persist(); });
+
+    const type = el("select", "b-type");
+    for (const t in TYPES) {
+        const o = el("option", "", TYPES[t]); o.value = t;
+        if (t === q.type) o.selected = true;
+        type.append(o);
+    }
+    type.addEventListener("change", () => {
+        q.type = type.value;
+        if (isChoice(q.type) && q.options.length === 0) q.options = ["Option 1", "Option 2"];
+        persist();
+        renderBuilder();                         // settings below depend on the type
+    });
+    top.append(label, type);
+    card.append(top);
+
+    // middle: settings that depend on the type
+    const body = el("div", "b-body");
+    const t = q.type;
+
+    if (isChoice(t)) {
+        const box = el("label", "fld wide");
+        box.append(el("span", "", "Options (one per line)"));
+        const ta = el("textarea"); ta.rows = 4; ta.value = q.options.join("\n");
+        ta.addEventListener("input", () => {
+            q.options = ta.value.split("\n").map(s => s.trim()).filter(Boolean);
+            persist();
+        });
+        box.append(ta);
+        body.append(box);
+        if (t !== "checkbox") body.append(checkField(q, "allowOther", 'Add an "Other" option with text box', "wide"));
+    }
+    if (t === "text" || t === "paragraph") body.append(numField(q, "minLength", "Minimum characters (0 = no limit)"));
+    if (t === "text") body.append(checkField(q, "lettersOnly", "Letters and spaces only"));
+    if (["text", "paragraph", "email", "phone", "number", "password"].includes(t)) body.append(textField(q, "placeholder", "Placeholder text"));
+    if (t === "number") { body.append(numField(q, "min", "Minimum value")); body.append(numField(q, "max", "Maximum value")); }
+    if (t === "date")   body.append(numField(q, "minAge", "Minimum age in years (0 = no limit)"));
+    if (t === "password") body.append(checkField(q, "confirm", "Ask user to confirm password"));
+    if (body.children.length) card.append(body);
+
+    // bottom row: required + move / copy / delete
+    const foot = el("div", "b-foot");
+    foot.append(checkField(q, "required", "Required"));
+
+    const btn = (text, fn, extra) => {
+        const b = el("button", "btn ghost small" + (extra ? " " + extra : ""), text);
+        b.type = "button"; b.addEventListener("click", fn);
+        return b;
+    };
+    const move = dir => () => {
+        const j = i + dir;
+        if (j < 0 || j >= schema.questions.length) return;
+        [schema.questions[i], schema.questions[j]] = [schema.questions[j], schema.questions[i]];
+        persist(); renderBuilder();
+    };
+    foot.append(
+        btn("\u2191 Up", move(-1)),
+        btn("\u2193 Down", move(1)),
+        btn("Duplicate", () => {
+            const copy = JSON.parse(JSON.stringify(q));
+            copy.id = uid();
+            schema.questions.splice(i + 1, 0, copy);
+            persist(); renderBuilder();
+        }),
+        btn("Delete", () => {
+            if (confirm("Delete this question?")) {
+                schema.questions.splice(i, 1);
+                persist(); renderBuilder();
+            }
+        }, "danger")
+    );
+    card.append(foot);
+    return card;
+}
+
+function renderBuilder() {
+    $("bTitle").value = schema.title;
+    $("bDesc").value = schema.description;
+    const list = $("builderList");
+    list.textContent = "";
+    if (!schema.questions.length) list.append(el("div", "empty-note", "No questions yet. Add one using the buttons below."));
+    schema.questions.forEach((q, i) => list.append(buildCard(q, i)));
+}
+
+$("bTitle").addEventListener("input", () => { schema.title = $("bTitle").value; persist(); });
+$("bDesc").addEventListener("input",  () => { schema.description = $("bDesc").value; persist(); });
+
+// "add question" chips
+const chips = $("addChips");
+for (const t in TYPES) {
+    const b = el("button", "chip", "+ " + TYPES[t]);
+    b.type = "button";
+    b.addEventListener("click", () => {
+        schema.questions.push(newQuestion(t));
+        persist();
+        renderBuilder();
+        const last = $("builderList").lastElementChild;
+        last.scrollIntoView({ behavior: "smooth", block: "center" });
+        const inp = last.querySelector(".b-label");
+        inp.focus(); inp.select();
+    });
+    chips.append(b);
+}
+
+$("resetSchemaBtn").addEventListener("click", () => {
+    if (confirm("Replace all current questions with the default registration questions?")) {
+        schema = defaultSchema();
+        persist(); renderBuilder();
+        toast("Default questions restored");
+    }
+});
+
+
+/* =====================================================================
+   PART 5 : RESPONSES
+   ===================================================================== */
+// Columns = current questions (except passwords) + old questions found in saved data
+function getColumns(responses) {
+    const cols = [], seen = new Set();
+    schema.questions.forEach(q => {
+        if (q.type !== "password") { cols.push({ id: q.id, label: q.label }); seen.add(q.id); }
+    });
+    responses.forEach(r => r.answers.forEach(a => {
+        if (!a.secret && !seen.has(a.id)) { seen.add(a.id); cols.push({ id: a.id, label: a.label + " (removed)" }); }
+    }));
+    return cols;
+}
+function cellText(r, colId) {
+    const a = r.answers.find(x => x.id === colId);
+    if (!a) return "";
+    return Array.isArray(a.value) ? a.value.join(", ") : a.value;
+}
+
+function renderResponses() {
+    const data = Store.getResponses();
+    const cols = getColumns(data);
+    $("respTotal").textContent = data.length;
+    $("respWord").textContent = data.length === 1 ? "response" : "responses";
+    $("emptyMsg").classList.toggle("hidden", data.length > 0);
+    $("respTable").classList.toggle("hidden", data.length === 0);
+
+    const head = $("respHead"); head.textContent = "";
+    const hr = el("tr");
+    ["#", "Time"].concat(cols.map(c => c.label)).concat([""]).forEach(h => hr.append(el("th", "", h)));
+    head.append(hr);
+
+    const body = $("respBody"); body.textContent = "";
+    data.forEach((r, i) => {
+        const tr = el("tr");
+        const cell = (label, text) => { const c = el("td", "", text); c.dataset.label = label; return c; };
+        tr.append(cell("#", i + 1), cell("Time", new Date(r.submittedAt).toLocaleString()));
+        cols.forEach(c => tr.append(cell(c.label, cellText(r, c.id))));
+
+        const td = el("td");
+        const del = el("button", "del", "Delete");
+        del.addEventListener("click", () => {
+            if (confirm("Delete this response?")) {
+                Store.removeResponse(r.id);
+                renderResponses(); updateCount(); toast("Response deleted");
+            }
+        });
+        td.append(del); tr.append(td);
+        body.append(tr);
+    });
+}
+
+$("deleteAllBtn").addEventListener("click", () => {
+    if (!Store.getResponses().length) return;
+    if (confirm("Delete ALL responses? This cannot be undone.")) {
+        Store.clearResponses();
+        renderResponses(); updateCount(); toast("All responses deleted");
+    }
+});
+
+function csvCell(value) {
+    let s = String(value == null ? "" : value);
+    if (/^[=+\-@]/.test(s)) s = "'" + s;           // stops Excel formula injection
+    return '"' + s.replace(/"/g, '""') + '"';
+}
+$("exportBtn").addEventListener("click", () => {
+    const data = Store.getResponses();
+    if (!data.length) { toast("No responses to export"); return; }
+    const cols = getColumns(data);
+    const rows = [["Timestamp"].concat(cols.map(c => c.label))];
+    data.forEach(r => rows.push([r.submittedAt].concat(cols.map(c => cellText(r, c.id)))));
+    const csv = rows.map(row => row.map(csvCell).join(",")).join("\r\n");
+
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "askly_responses.csv"; a.click();
+    URL.revokeObjectURL(url);
+});
+
+function updateCount() { $("responseCount").textContent = Store.getResponses().length; }
+
+
+/* =====================================================================
+   PART 6 : NAVIGATION + START-UP
+   ===================================================================== */
+let snackTimer;
+function toast(msg) {
+    const s = $("snackbar");
+    s.textContent = msg;
+    s.classList.add("show");
+    clearTimeout(snackTimer);
+    snackTimer = setTimeout(() => s.classList.remove("show"), 2500);
+}
+
+const PAGE_NAMES = { fillView: "Fill Form", buildView: "Build Form", respView: "Responses" };
+
+function showView(id) {
+    $("pageTitle").textContent = PAGE_NAMES[id];
+    ["fillView", "buildView", "respView"].forEach(v => $(v).classList.toggle("hidden", v !== id));
+    document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === id));
+
+    if (id === "fillView")  { renderForm(); $("liveForm").classList.remove("hidden"); $("successBox").classList.add("hidden"); }
+    if (id === "buildView") renderBuilder();
+    if (id === "respView")  renderResponses();
+    window.scrollTo(0, 0);
+}
+document.querySelectorAll(".nav-btn").forEach(b => b.addEventListener("click", () => {
+    showView(b.dataset.view);
+    if (isPhone()) setMenu(false);           // close the drawer after choosing a page
+}));
+
+/* ----- Hamburger menu -----
+   Phones (<= 860px): menu slides in as a drawer over the page  (class "menu-open")
+   Desktop          : menu collapses / expands                  (class "collapsed") */
+const app = document.querySelector(".app");
+const phoneQuery = window.matchMedia("(max-width: 860px)");
+function isPhone() { return phoneQuery.matches; }
+
+function setMenu(open) {
+    if (isPhone()) {
+        app.classList.toggle("menu-open", open);
+        document.body.classList.toggle("no-scroll", open);   // stop page scrolling behind the drawer
+    } else {
+        app.classList.toggle("collapsed", !open);
+    }
+    $("menuBtn").setAttribute("aria-expanded", String(open));
+}
+function menuIsOpen() {
+    return isPhone() ? app.classList.contains("menu-open") : !app.classList.contains("collapsed");
+}
+$("menuBtn").addEventListener("click", () => setMenu(!menuIsOpen()));
+$("sideClose").addEventListener("click", () => setMenu(false));
+$("backdrop").addEventListener("click", () => setMenu(false));
+document.addEventListener("keydown", e => { if (e.key === "Escape" && isPhone()) setMenu(false); });
+
+// when screen size changes (rotate phone / resize window) reset the menu state
+phoneQuery.addEventListener("change", () => {
+    app.classList.remove("menu-open", "collapsed");
+    document.body.classList.remove("no-scroll");
+    $("menuBtn").setAttribute("aria-expanded", String(!isPhone()));
+});
+// start: closed on phones, open on desktop
+$("menuBtn").setAttribute("aria-expanded", String(!isPhone()));
+
+// start
+renderForm();
+updateCount();
